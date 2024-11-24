@@ -1,5 +1,8 @@
 fn main() {
-    let s = "(123  456  world)";
+    let s = "Hello world";
+    println!("source: {:?}, parsed:\n {:?}", s, source(s));
+
+    let s = "(123  456 ) world";
     println!("source: {:?}, parsed:\n {:?}", s, source(s));
 
     let s = "((car cdr) cdr)";
@@ -40,51 +43,68 @@ fn peek_char(input: &str) -> Option<char> {
 ///
 /// # 戻り値
 /// * `Vec<Token>` - 解析結果のトークンのリスト
-fn source(mut input: &str) -> Vec<Token> {
+fn source(mut input: &str) -> (&str, TokenTree) {
     let mut tokens = vec![];
-
     while !input.is_empty() {
-        input = if let (next_input, Some(token)) = token(input) {
-            tokens.push(token);
-            next_input
+        input = if let Some((next_input, token)) = token(input) {
+            match token {
+                Token::LParen => {
+                    let (next_input, tt) = source(next_input);
+                    tokens.push(tt);
+                    next_input
+                }
+                Token::RParen => return (next_input, TokenTree::Tree(tokens)),
+                _ => {
+                    tokens.push(TokenTree::Token(token));
+                    next_input
+                }
+            }
         } else {
             break;
         }
     }
-    tokens
+    (input, TokenTree::Tree(tokens))
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum Token {
-    Indent,
-    Number,
+#[derive(Debug, PartialEq)]
+enum Token<'src> {
+    Ident(&'src str),
+    Number(f64),
     LParen,
     RParen,
 }
 
-fn token(i: &str) -> (&str, Option<Token>) {
-    if let (i, Some(ident_res)) = ident(whitespace(i)) {
-        return (i, Some(ident_res));
+#[derive(Debug, PartialEq)]
+enum TokenTree<'src> {
+    Token(Token<'src>),
+    Tree(Vec<TokenTree<'src>>),
+}
+
+fn token(input: &str) -> Option<(&str, Token)> {
+    if let Some(res) = ident(whitespace(input)) {
+        return Some(res);
     }
 
-    if let (i, Some(number_res)) = number(whitespace(i)) {
-        return (i, Some(number_res));
+    if let Some(res) = number(whitespace(input)) {
+        return Some(res);
     }
 
-    if let (i, Some(lparen_res)) = lparen(whitespace(i)) {
-        return (i, Some(lparen_res));
+    if let Some(res) = lparen(whitespace(input)) {
+        return Some(res);
     }
 
-    if let (i, Some(rparen_res)) = rparen(whitespace(i)) {
-        return (i, Some(rparen_res));
+    if let Some(res) = rparen(whitespace(input)) {
+        return Some(res);
     }
 
-    (whitespace(i), None)
+    None
 }
 
 fn whitespace(mut input: &str) -> &str {
     while matches!(peek_char(input), Some(' ')) {
-        input = advance_char(input);
+        let mut chars = input.chars();
+        chars.next();
+        input = chars.as_str();
     }
     input
 }
@@ -98,17 +118,19 @@ fn whitespace(mut input: &str) -> &str {
 /// * `(&str, Option<Token>)` - (残りの入力文字列, 解析結果のトークン)のタプル
 ///   - 識別子として解析できた場合は `Some(Token::Indent)` を返す
 ///   - 解析できなかった場合は `None` を返す
-fn ident(mut input: &str) -> (&str, Option<Token>) {
+fn ident(mut input: &str) -> Option<(&str, Token)> {
+    let start = input;
     if matches!(peek_char(input), Some(_x @ ('a'..='z' | 'A'..='Z'))) {
+        input = advance_char(input);
         while matches!(
             peek_char(input),
             Some(_x @ ('a'..='z' | 'A'..='Z' | '0'..='9'))
         ) {
             input = advance_char(input);
         }
-        (input, Some(Token::Indent))
+        Some((input, Token::Ident(&start[..(start.len() - input.len())])))
     } else {
-        (input, None)
+        None
     }
 }
 
@@ -119,15 +141,20 @@ fn ident(mut input: &str) -> (&str, Option<Token>) {
 ///
 /// # 戻り値
 /// * `(&str, Option<Token>)` - (残りの入力文字列, 解析結果のトークン)のタプル
-fn number(mut input: &str) -> (&str, Option<Token>) {
+fn number(mut input: &str) -> Option<(&str, Token)> {
+    let start = input;
     if matches!(peek_char(input), Some(_x @ ('-' | '+' | '.' | '0'..='9'))) {
         input = advance_char(input);
         while matches!(peek_char(input), Some(_x @ ('.' | '0'..='9'))) {
             input = advance_char(input);
         }
-        (input, Some(Token::Number))
+        if let Ok(num) = start[..(start.len() - input.len())].parse::<f64>() {
+            Some((input, Token::Number(num)))
+        } else {
+            None
+        }
     } else {
-        (input, None)
+        None
     }
 }
 
@@ -138,15 +165,14 @@ fn number(mut input: &str) -> (&str, Option<Token>) {
 ///
 /// # 戻り値
 /// * `(&str, Option<Token>)` - (残りの入力文字列, 解析結果のトークン)のタプル
-fn lparen(mut input: &str) -> (&str, Option<Token>) {
+fn lparen(mut input: &str) -> Option<(&str, Token)> {
     if matches!(peek_char(input), Some('(')) {
         input = advance_char(input);
-        (input, Some(Token::LParen))
+        Some((input, Token::LParen))
     } else {
-        (input, None)
+        None
     }
 }
-
 /// 右括弧を解析する関数
 ///
 /// # 引数
@@ -154,12 +180,12 @@ fn lparen(mut input: &str) -> (&str, Option<Token>) {
 ///
 /// # 戻り値
 /// * `(&str, Option<Token>)` - (残りの入力文字列, 解析結果のトークン)のタプル
-fn rparen(mut input: &str) -> (&str, Option<Token>) {
+fn rparen(mut input: &str) -> Option<(&str, Token)> {
     if matches!(peek_char(input), Some(')')) {
         input = advance_char(input);
-        (input, Some(Token::RParen))
+        Some((input, Token::RParen))
     } else {
-        (input, None)
+        None
     }
 }
 
@@ -169,16 +195,16 @@ mod test {
 
     #[test]
     fn test_whitespace() {
-        assert_eq!(whitespace(" "), "");
+        assert_eq!(whitespace("    "), "");
     }
 
     #[test]
     fn test_ident() {
-        assert_eq!(ident("Adam"), "");
+        assert_eq!(ident("Adam"), Some(("", Token::Ident("Adam"))));
     }
 
     #[test]
     fn test_number() {
-        assert_eq!(number("123.45"), "");
+        assert_eq!(number("123.45 "), Some((" ", Token::Number(123.45))));
     }
 }
